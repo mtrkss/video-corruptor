@@ -12,7 +12,7 @@
 ## GStreamer freeze
 - Command: any
 - Why?: Random issues with the encoder/muxer
-- Fix: Try different -g settings
+- Fix: Try different -g settings, don't use --audio
 
 ## Other GStreamer errors
 - Command: any
