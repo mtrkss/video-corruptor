@@ -14,13 +14,14 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-unset input output filter cset vidfmt caufmt pixfmt complex debug gstcfg lavfi
+unset input output filter cset vidfmt caufmt pixfmt complex debug gstcfg lavfi arate
 
 caufmt=alaw # audio format used to interpret the video
 vidfmt=avi # used while converting and corrupting
 pixfmt=yuv420p # yeah
-gstcfg="x264enc bitrate=50000 psy-tune=grain ! mp4mux"
+gstcfg="x264enc bitrate=50000 psy-tune=grain"
 hsize=80120 # presumable header size
+arate=48000
 
 if [ "$(uname -o)" = Android ] || [ "$(uname -o)" = Toybox ] # only use quotes for uname to treat the whole output as a single string
 then tmpdir=./tmp
@@ -43,14 +44,16 @@ Corruption:
  -c=<video color format>
  -g=<gstreamer config>
  -a=<intermediate audio format>
+ -r=<intermediate audio frequency>
  -v=<intermediate video format>
  -au=<complex audio input>
 
 Other:
  --help		Show this help message
  --license	Self-explanatory
- --debug	Debug info, Don't delete temp files.
- --lavfi	Add "-f lavfi" before second -i (only works with -au)
+ --debug	Debug info, don't delete temp files
+ --lavfi	Presume lavfi -au format
+ --audio	Enable audio (DANGEROUS!)
  
 Examples:
 $ ./corruptor.sh -i=input.mp4 -f=lowpass
@@ -60,6 +63,7 @@ $ ./corruptor.sh -i=input.mp4 -o=/tmp/somevideo -f=custom --lavfi -au="anoisesrc
 Info:
 If no output is specified, input file hash + .mp4 will be used instead.
 If -au is specified, "-af" in ffcmd will get replaced with "-filter_complex"
+Enabling audio may cause encoder issues, VERY loud sounds and overbloated video outputs (up to 20GB)
 
 EOF
 		exit 0
@@ -83,9 +87,11 @@ for arg in $args; do
 		-a=*) caufmt="${arg#*=}" ;;
 		-c=*) pixfmt="${arg#*=}" ;; #
 		-g=*) gstcfg="${arg#*=}" ;;
+		-r=*) arate="${arg#*=}" ;;
 		-au=*) complex="${arg#*=}" ;;
 		--debug) debug=y ;;
 		--lavfi) lavfi=y ;;
+		--audio) audio=y ;;
 		*) ;;  # ignore any other args
 	esac
 done
@@ -134,6 +140,7 @@ cset>	$cset
 gst>	$gstcfg
 au> 	$complex
 lavfi>	$lavfi
+audio>	$audio
 EOF
 read nothing
 }
@@ -162,7 +169,7 @@ chkapp gst-launch-1.0 gstreamer
 
 ## check if the input file is too big
 if [ $(wc -c<"$input") -gt 32428800 ]
-then printf "The input video is too big!\nFrom my tests 10 seconds of 720p30fps footage need at least 1 Gigabyte of free storage at /tmp to get corrupted!\nAre you sure you want to continue? [y/N]"
+then printf "The input video is too big!\nFrom my tests 10 seconds of 720p30fps footage requires at least 1 GB of free storage at /tmp!\nAre you sure you want to continue? [y/N]"
 	 read ans;echo $ans|grep -E [yY]>/dev/null||exit 1
 fi
 
@@ -176,10 +183,10 @@ printf "Done.\n"
 ffset() {
 fv1="$cset"
 if [ -z $complex ]
-then basecmd="ffmpeg -y -f $caufmt -i $ucvid -threads $(nproc) -af"
+then basecmd="ffmpeg -y -f $caufmt -ar $arate -i $ucvid -af"
 elif [ -z $lavfi ]
-then basecmd="ffmpeg -y -f $caufmt -i $ucvid -i $complex -threads $(nproc) -filter_complex"
-else basecmd="ffmpeg -y -f $caufmt -i $ucvid -f lavfi -i $complex -threads $(nproc) -filter_complex" 
+then basecmd="ffmpeg -y -f $caufmt -ar $arate -i $ucvid -i $complex -filter_complex"
+else basecmd="ffmpeg -y -f $caufmt -ar $arate -i $ucvid -f lavfi -i $complex -filter_complex" 
 fi
 
 [ -z "$fv1" ] && ! [ "$filter" = custom ] && rval
@@ -195,7 +202,7 @@ case "$filter" in
 		*) error "I don't know this filter!" 76
 	;;
 esac
-}
+}	
 ## setting the ffcmd (checks included)
 if [ -z "$input" ]; then
 	error "I need an input video!" 66
@@ -212,7 +219,7 @@ fi
 # corruption
 [ ! -z $debug ] && printf "Everything correct here?\n" && debug
 
-ffmpeg -y -i "$input" -c:v rawvideo -pix_fmt $pixfmt -an -threads $(nproc) $ucvid || ffwrong && cls
+ffmpeg -y -i "$input" -c:v rawvideo -pix_fmt $pixfmt $([ -z $audio ]&&printf "%s-an ")-threads $(nproc) $ucvid || ffwrong && cls
 $ffcmd || ffwrong && cls
 
 # restoring the header
@@ -234,7 +241,7 @@ printf "Done\n" || error "Something went wrong!" 1
 # [ -z $debug ] && printf "Removing inter1..." && rm "$inter1" && printf "Done\n" # why did i add this
 
 printf "\nArming GStreamer...\n"
-gst-launch-1.0 filesrc location=$cvid ! decodebin ! videoconvert ! $gstcfg ! filesink location="$output" &&
+gst-launch-1.0 filesrc location=$cvid ! decodebin ! videoconvert ! $gstcfg ! mp4mux ! filesink location="$output" &&
 printf "Everything Done!\n\n" || error "Something went wrong!" 1
 
 if [ ! -z $debug ]
